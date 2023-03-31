@@ -4,4 +4,4 @@ __pycache__/
 data/test/*
 data/train/*
 outputs/*
-notebooks/junk/*
+notebooks/junk
