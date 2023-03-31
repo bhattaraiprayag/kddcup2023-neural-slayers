@@ -13,7 +13,7 @@ To address this gap, we present the "Multilingual Shopping Session Dataset," a d
     predicting the next engaged product for sessions from French, Italian, and Spanish, where transfer learning techniques are encouraged
     predicting the title for the next engaged product
 
-We hope this dataset and competition will encourage the development of multilingual recommendation systems, which can enhance personalization and understanding of global trends and preferences. This competition aims to provide practical solutions that benefit customers worldwide by promoting diversity and innovation in data science. The dataset will be publicly available to the research community, and standard evaluation metrics will be used to assess model performance.\
+We hope this dataset and competition will encourage the development of multilingual recommendation systems, which can enhance personalization and understanding of global trends and preferences. This competition aims to provide practical solutions that benefit customers worldwide by promoting diversity and innovation in data science. The dataset will be publicly available to the research community, and standard evaluation metrics will be used to assess model performance.
 
 🗃️ **Dataset**\
 The dataset released is anonymized and not representative of the production characteristics.
@@ -43,13 +43,13 @@ In addition, we list the column names and their meanings for product attribute d
     model: model of the item (e.g., “iphone 13”)
     material: material of the item (e.g., “cotton”)
     author: author of the item (e.g., “J. K. Rowling”)
-    desc: description about a item’s key features and benefits called out via bullet points (e.g., “Solid colors: 100% Cotton; Heather Grey: 90% Cotton, 10% Polyester; All Other Heathers …”)\
+    desc: description about a item’s key features and benefits called out via bullet points (e.g., “Solid colors: 100% Cotton; Heather Grey: 90% Cotton, 10% Polyester; All Other Heathers …”)
 
 🕵️‍♀️ **Tasks**\
 The main objective of this competition is to build advanced session-based algorithms/models that directly predicts the next engaged product or generates its title text. The three tasks we proposed are:\
     Next Product Recommendation\
     Next Product Recommendation for Underrepresented Languages/Locales\
-    Next Product Title Generation\
+    Next Product Title Generation
 
 Note that the three tasks share the same training set. However, the objectives of three tasks are different. Details of each tasks are as follows:
 
