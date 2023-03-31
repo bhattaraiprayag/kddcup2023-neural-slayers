@@ -1,4 +1,4 @@
-# Set the 'prefix' path below according to your environment's location
+# Set the 'prefix' path ALL THE WAY DOWN according to your miniconda/anaconda installation path, as shown below
 "prefix: C:\miniconda3\envs\kddcup2023"  
 name: kddcup2023
 channels:
