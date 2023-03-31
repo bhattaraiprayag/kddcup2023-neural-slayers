@@ -119,6 +119,6 @@ BP={1,if Lc>Lrexp⁡(1−LrLc),ifLc≤Lr
 where Lc is the length of the generation and Lr is the length of the shortest reference. In general, the BLEU score ranges from 0 to 1, with higher scores indicating better generation.
 
 We set N=4 (i.e., BLEU-4) with wn=1/N for this task.
-Leaderboard & Evaluations
 
+Leaderboard & Evaluations
 Each task will have its separate leaderboard, which will be maintained throughout the competition for models evaluated on the public test set. At the end of the competition, a private leaderboard will be maintained for models evaluated on the private test set. This latter leaderboard will be used to decide the winners for each task in the competition. The leaderboard on the public test set is meant to guide participants on their model performance and compare it with other participants.
