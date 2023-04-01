@@ -47,12 +47,12 @@ task = 'task1'
 train_path = '../../data/train/'
 test_path = '../../data/test/sessions_test_' + task + '.csv'
 PREDS_PER_SESSION = 100
-slice_size = 10000                                           # Memory management, None for entire dataset
+# slice_size = 10000                                           # Memory management, None for entire dataset
 non_text_cols = ['id', 'locale', 'price']
 
 
 # Function to load all data
-def load_all_data():
+def load_all_data(slice_size=None):
     """
     This function loads and cleans all necessary data for the project.
     It calls the load_and_clean_data function for each dataset and returns them as a tuple.
@@ -64,7 +64,3 @@ def load_all_data():
     sessions_test = load_and_clean_data(test_path, slice_size=slice_size)
 
     return products_train, sessions_train, sessions_test
-
-
-# Load all data
-products_train, sessions_train, sessions_test = load_all_data()
