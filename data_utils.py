@@ -1,5 +1,7 @@
 import pandas as pd
+
 from typing import Tuple, Dict, List
+from sklearn.preprocessing import StandardScaler
 
 # Function to analyze dataframes
 def analyze_sessions(
@@ -53,7 +55,34 @@ def view_common_products(
 
 # Function to split a dataset based on locales
 def split_locales(df: pd.DataFrame, locales: List[str]) -> List[pd.DataFrame]:
-    return [df[df['locale'] == locale] for locale in locales]
+    """Split dataframe based on locale preserving ID continuity"""
+    if 'title' in df.columns:
+        id_col = 'id'
+    elif 'prev_items' in df.columns:
+        id_col = 'session_id'
+    else:
+        print('You provided an invalid dataframe!')
+    # initial value for starting_id
+    starting_id = 1
+    
+    df_list = []  # to hold split dataframes
+    
+    for locale in locales:
+        # filter dataframe by locale
+        df_locale = df[df['locale'] == locale].copy()
+        
+        # check if df_locale is not empty (i.e., there are rows for the locale)
+        if not df_locale.empty:
+            # reassign IDs to ensure continuity
+            df_locale[id_col] = range(starting_id, starting_id + len(df_locale))
+            
+            # update starting_id for the next locale
+            starting_id += len(df_locale)
+        
+        # add dataframe to list
+        df_list.append(df_locale)
+    
+    return df_list
 
 # Function to split a dataset based on locales and save to csv
 def split_locales_and_save(df: pd.DataFrame, locales: List[str], output_dir: str, filename: str) -> None:
@@ -75,3 +104,20 @@ def split_sessions(df: pd.DataFrame, val_size: float, test_size: float) -> List[
     test_df = df.iloc[int(len(df) * (train_size + val_size)):]
     
     return [train_df, val_df, test_df]
+
+# Scale numeric features
+def scale_prices(df, locales):
+    scaled_df = df.copy()
+    for locale in locales:
+        scaler = StandardScaler()
+        
+        # Create a boolean mask to filter rows with the current locale
+        locale_mask = scaled_df['locale'] == locale
+        
+        if not scaled_df[locale_mask].empty:  # Check if the DataFrame is not empty
+            # Directly update the 'price' column in the 'scaled_df' DataFrame using the .loc[] indexer
+            scaled_df.loc[locale_mask, 'price'] = scaler.fit_transform(scaled_df.loc[locale_mask, ['price']])
+        else:
+            print(f"No data found for locale: {locale}")
+            
+    return scaled_df
