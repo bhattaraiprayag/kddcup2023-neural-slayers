@@ -1,4 +1,5 @@
-# Imports
+# prepare_artefacts.py
+
 import os
 import faiss
 import importlib
@@ -9,8 +10,8 @@ from sklearn.decomposition import TruncatedSVD
 from sklearn.preprocessing import normalize
 import warnings
 from tqdm import TqdmWarning
+import pickle
 
-# Project Modules
 import data_processor
 import data_utils
 import faiss_index
@@ -27,47 +28,46 @@ from configs import (
     SEED, NUM_RECOMMENDATIONS, N_COMPONENTS, TASK, LOCALES,
     DATA_PATH, OUTPUT_PATH, TRAIN_PATH, TEST_PATH,
     EMBED_PATH, INDEX_PATH, COMBINED_FEATURES, BATCH_SIZE,
-    PROD_DTYPES, SESS_DTYPES
+    PROD_DTYPES, SESS_DTYPES, USE_SLICER, USE_PRED_SLICER,
+    SLICER, PRED_SLICER
 )
 
+
+def reduce_embeddings(embeddings, n_components, random_state):
+    svd = TruncatedSVD(n_components=n_components, random_state=random_state)
+    embeddings_reduced = svd.fit_transform(embeddings)
+    embeddings_reduced = normalize(embeddings_reduced)
+    return embeddings_reduced
+
+
 def prepare_locale_artefacts():
-    # Configuration
     os.makedirs(EMBED_PATH, exist_ok=True)
     os.makedirs(INDEX_PATH, exist_ok=True)
 
-    # Utility Functions
-    def reduce_embeddings(embeddings, n_components, random_state):
-        """Reduces embedding dimensionality using TruncatedSVD and normalizes the result."""
-        svd = TruncatedSVD(n_components=n_components, random_state=random_state)
-        embeddings_reduced = svd.fit_transform(embeddings)
-        embeddings_reduced = normalize(embeddings_reduced)
-        return embeddings_reduced
-
-    # Data Loading
     project_files = ['products_train.csv', 'sessions_train.csv', f'sessions_test_{TASK}.csv']
-    products_train, sessions_train, _ = handle_data(
+    products_train, sessions_train, sessions_test = handle_data(
         project_files, [TRAIN_PATH, TRAIN_PATH, TEST_PATH],
         TASK, LOCALES, 1, SEED, PROD_DTYPES, SESS_DTYPES
     )
 
-    # Preprocessing
     products_train = scale_prices(products_train, LOCALES)
     products_list = split_locales(products_train, LOCALES)
     sessions_list = split_locales(sessions_train, LOCALES)
+    sessions_test_list = split_locales(sessions_test, LOCALES)
+
+    if USE_SLICER:
+        products_list = [products[:SLICER] for products in products_list]
+        sessions_list = [sessions[:SLICER] for sessions in sessions_list]
+        sessions_test_list = [sessions_test[:SLICER] for sessions_test in sessions_test_list]
     products_by_locale = dict(zip(LOCALES, products_list))
     sessions_by_locale = dict(zip(LOCALES, sessions_list))
+    sessions_test_by_locale = dict(zip(LOCALES, sessions_test_list))
 
-    # Processing and FAISS Indexing
     locale_data = {}
-    # print("\n--- Processing Locales, Reducing Embeddings, and Creating FAISS Indices ---")
     for locale in LOCALES:
-        print(f"\nProcessing locale: {locale}")
-        
-        # Define paths for the current locale
         locale_embed_path = os.path.join(EMBED_PATH, f'products_{locale}.npy')
         locale_faiss_path = os.path.join(INDEX_PATH, f'products_{locale}.faiss')
 
-        # Load original embeddings
         full_embeddings = load_locale_embeddings(
             locale=locale,
             products=products_by_locale[locale],
@@ -75,13 +75,13 @@ def prepare_locale_artefacts():
             batch_size=BATCH_SIZE,
             locale_embed_path={locale: locale_embed_path}
         )
-        # print(f"Loaded full embeddings for {locale} with shape: {full_embeddings.shape}")
+        id2embidx_path = locale_embed_path.replace('.npy', '_id2embidx.pkl')
+        os.makedirs(os.path.dirname(id2embidx_path), exist_ok=True)
+        with open(id2embidx_path, 'rb') as f:
+            prod_id_to_emb_idx_map = pickle.load(f)
 
-        # Reduce embedding dimensionality
         reduced_embeddings = reduce_embeddings(full_embeddings, N_COMPONENTS, SEED)
-        # print(f"Reduced embeddings for {locale} to shape: {reduced_embeddings.shape}")
-        
-        # Create and save FAISS index using reduced embeddings
+
         embeddings_dict = {locale: reduced_embeddings}
         faiss_paths_dict = {locale: locale_faiss_path}
         
@@ -93,29 +93,46 @@ def prepare_locale_artefacts():
             index_files=faiss_paths_dict,
             batch_size=BATCH_SIZE
         )
-        # print(f"FAISS index for {locale} created with {faiss_index_object.ntotal} vectors.")
 
-        # Store all data for the locale
         locale_data[locale] = {
             'products': products_by_locale[locale],
             'sessions': sessions_by_locale[locale],
+            'sessions_test': sessions_test_by_locale[locale],
             'embeddings': reduced_embeddings,
-            'faiss_index': faiss_index_object
+            'prod_id_to_emb_idx_map': prod_id_to_emb_idx_map,
+            'faiss_index': faiss_index_object,
         }
-
-    print("\n--- All locales processed successfully ---")
     return locale_data
 
 
 if __name__ == "__main__":
-    # Suppress TqdmWarning for cleaner output
     warnings.filterwarnings("ignore", category=TqdmWarning)
-    
-    # Run the main function
+
     locale_data = prepare_locale_artefacts()
-    
-    # Example of accessing the generated data for a locale
+
     print(f"\nData for DE locale: {locale_data['DE'].keys()}")
     print(f"Products shape: {locale_data['DE']['products'].shape}")
+    print(f"Sessions shape: {locale_data['DE']['sessions'].shape}")
+    print(f"Test Sessions shape: {locale_data['DE']['sessions_test'].shape}")
     print(f"Embeddings shape: {locale_data['DE']['embeddings'].shape}")
     print(f"FAISS index total: {locale_data['DE']['faiss_index'].ntotal}")
+
+    # # Check first item of the embeddings
+    # print(f"First embedding for DE locale: {locale_data['DE']['embeddings'][0]}")
+    # Check first 10 similar items of the first product embedding
+    first_product_id = locale_data['DE']['products']['id'].iloc[0]
+    first_product_emb_idx = locale_data['DE']['prod_id_to_emb_idx_map'][first_product_id]
+    first_product_emb_idx = locale_data['DE']['prod_id_to_emb_idx_map'][first_product_id]
+    distances, indices = locale_data['DE']['faiss_index'].search(
+        np.expand_dims(locale_data['DE']['embeddings'][first_product_emb_idx], axis=0), 10
+    )
+    print(f"First 10 similar items for product ID {first_product_id}:")
+    for idx, dist in zip(indices[0], distances[0]):
+        if idx != first_product_emb_idx:
+            similar_product_id_idx = int(idx)
+            emb_idx_to_prod_id_map = {v: k for k, v in locale_data['DE']['prod_id_to_emb_idx_map'].items()}
+            if similar_product_id_idx in emb_idx_to_prod_id_map:
+                similar_product_id = emb_idx_to_prod_id_map[similar_product_id_idx]
+                print(f"Product ID: {similar_product_id}, Distance: {dist:.4f}")
+            else:
+                print(f"Product ID not found for index {similar_product_id_idx}")
