@@ -1,6 +1,7 @@
 # faiss_index.py
 
 import os
+
 import faiss
 import numpy as np
 from tqdm import tqdm

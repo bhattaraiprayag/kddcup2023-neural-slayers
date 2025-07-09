@@ -1,28 +1,35 @@
 # lightning_model.py
 
+import os
+import pytorch_lightning as pl
 import torch
 import torch.nn as nn
-import pytorch_lightning as pl
+from torch.utils.data import DataLoader
 
-from model import TwoTowerModel
+from models import TwoTowerModel
+from dataset import SessionDataset
 
 
 class LightningTwoTower(pl.LightningModule):
     def __init__(self, embedding_dim, nhead,
                  num_encoder_layers, dim_feedforward,
                  precomputed_embeddings, learning_rate,
-                 triplet_margin, num_negatives, dropout=0.1
+                 triplet_margin, dropout=0.1,
+                 train_sessions_df=None, id_to_idx=None,
+                 neg_samples_map=None, max_session_length=None,
+                 num_negatives=None, batch_size=None
                  ):
         super().__init__()
         self.save_hyperparameters(
-            'embedding_dim',
-            'nhead',
-            'num_encoder_layers',
-            'dim_feedforward',
-            'learning_rate',
-            'triplet_margin',
-            'num_negatives'
+            'embedding_dim', 'nhead', 'num_encoder_layers',
+            'dim_feedforward', 'learning_rate', 'triplet_margin',
+            'num_negatives', 'batch_size'
         )
+        self.train_sessions_df = train_sessions_df
+        self.id_to_idx = id_to_idx
+        self.neg_samples_map = neg_samples_map
+        self.max_session_length = max_session_length
+
         self.two_tower_model = TwoTowerModel(
             embedding_dim=embedding_dim,
             nhead=nhead,
@@ -33,7 +40,8 @@ class LightningTwoTower(pl.LightningModule):
         )
         self.loss_fn = nn.TripletMarginLoss(margin=self.hparams.triplet_margin)
 
-    def forward(self, session_indices, positive_item_indices, negative_item_indices):
+    def forward(self, session_indices, positive_item_indices,
+                negative_item_indices):
         return self.two_tower_model(session_indices, positive_item_indices, negative_item_indices)
 
     def training_step(self, batch, batch_idx):
@@ -49,6 +57,19 @@ class LightningTwoTower(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.hparams.learning_rate)
         return optimizer
+
+    def train_dataloader(self):
+        if self.train_sessions_df is None:
+            return None
+
+        train_dataset = SessionDataset(
+            self.train_sessions_df, self.id_to_idx, self.neg_samples_map,
+            self.max_session_length, self.hparams.num_negatives
+        )
+        return DataLoader(
+            train_dataset, batch_size=self.hparams.batch_size, shuffle=True,
+            num_workers=int(os.cpu_count() // 2), pin_memory=True
+        )
 
     @property
     def query_tower(self):

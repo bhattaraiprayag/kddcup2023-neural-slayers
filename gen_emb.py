@@ -1,11 +1,10 @@
 # gen_emb.py
 
 import os
-import faiss
 import pickle
 
+import faiss
 import numpy as np
-
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 

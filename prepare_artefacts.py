@@ -1,36 +1,35 @@
 # prepare_artefacts.py
 
-import os
-import faiss
 import importlib
+import os
+import pickle
+import warnings
+
+import faiss
 import numpy as np
 import pandas as pd
 import psutil
 from sklearn.decomposition import TruncatedSVD
 from sklearn.preprocessing import normalize
-import warnings
 from tqdm import TqdmWarning
-import pickle
 
 import data_processor
 import data_utils
 import faiss_index
 import gen_emb
+
 importlib.reload(data_processor)
 importlib.reload(data_utils)
 importlib.reload(faiss_index)
 importlib.reload(gen_emb)
+from configs import (
+    BATCH_SIZE, COMBINED_FEATURES, DATA_PATH, EMBED_PATH, P2P_GRAPH_PATH, INDEX_PATH, LOCALES, N_COMPONENTS, NUM_RECOMMENDATIONS, OUTPUT_PATH, PRED_SLICER, PROD_DTYPES, SEED, SESS_DTYPES, SLICER, TASK, TEST_PATH, TRAIN_PATH, USE_PRED_SLICER, USE_SLICER
+)
 from data_processor import handle_data
 from data_utils import scale_prices, split_locales
-from gen_emb import load_locale_embeddings
 from faiss_index import create_locale_indices
-from configs import (
-    SEED, NUM_RECOMMENDATIONS, N_COMPONENTS, TASK, LOCALES,
-    DATA_PATH, OUTPUT_PATH, TRAIN_PATH, TEST_PATH,
-    EMBED_PATH, INDEX_PATH, COMBINED_FEATURES, BATCH_SIZE,
-    PROD_DTYPES, SESS_DTYPES, USE_SLICER, USE_PRED_SLICER,
-    SLICER, PRED_SLICER
-)
+from gen_emb import load_locale_embeddings
+from session_graph_builder import ProductGraphBuilder
 
 
 def reduce_embeddings(embeddings, n_components, random_state):
@@ -67,6 +66,7 @@ def prepare_locale_artefacts():
     for locale in LOCALES:
         locale_embed_path = os.path.join(EMBED_PATH, f'products_{locale}.npy')
         locale_faiss_path = os.path.join(INDEX_PATH, f'products_{locale}.faiss')
+        locale_p2p_graph_path = os.path.join(P2P_GRAPH_PATH, f'graph_pmi_{locale}.gpickle')
 
         full_embeddings = load_locale_embeddings(
             locale=locale,
@@ -84,7 +84,6 @@ def prepare_locale_artefacts():
 
         embeddings_dict = {locale: reduced_embeddings}
         faiss_paths_dict = {locale: locale_faiss_path}
-        
         faiss_index_object = create_locale_indices(
             locale=locale,
             locale_embeddings=embeddings_dict,
@@ -94,6 +93,17 @@ def prepare_locale_artefacts():
             batch_size=BATCH_SIZE
         )
 
+        if not os.path.exists(locale_p2p_graph_path):
+            graph_builder = ProductGraphBuilder(sessions_by_locale[locale])
+            p2p_graph = graph_builder.build_graph(
+                weight_type='pmi',
+                num_workers=-1,
+                session_slice=SLICER if USE_SLICER else None
+            )
+            ProductGraphBuilder.save_graph(p2p_graph, locale_p2p_graph_path)
+        else:
+            p2p_graph = ProductGraphBuilder.load_graph(locale_p2p_graph_path)
+
         locale_data[locale] = {
             'products': products_by_locale[locale],
             'sessions': sessions_by_locale[locale],
@@ -101,6 +111,7 @@ def prepare_locale_artefacts():
             'embeddings': reduced_embeddings,
             'prod_id_to_emb_idx_map': prod_id_to_emb_idx_map,
             'faiss_index': faiss_index_object,
+            'p2p_graph': p2p_graph
         }
     return locale_data
 

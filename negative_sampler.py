@@ -2,14 +2,15 @@
 
 import os
 import pickle
-import numpy as np
-import faiss
-from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
-import psutil
 from functools import partial
 
-from configs import TOTAL_NEGATIVE_SAMPLES, HARD_NEGATIVE_RATIO
+import faiss
+import numpy as np
+import psutil
+from tqdm import tqdm
+
+from configs import HARD_NEGATIVE_RATIO, TOTAL_NEGATIVE_SAMPLES
 
 NUM_HARD_NEGATIVES = int(TOTAL_NEGATIVE_SAMPLES * HARD_NEGATIVE_RATIO)
 NUM_RANDOM_NEGATIVES = TOTAL_NEGATIVE_SAMPLES - NUM_HARD_NEGATIVES
@@ -41,7 +42,7 @@ def create_negative_samples_for_locale(locale, sessions_df, faiss_index, prod_id
     os.makedirs(output_path, exist_ok=True)
     output_file = os.path.join(output_path, f'negative_samples_{locale}.pkl')
     if os.path.exists(output_file) and os.path.getsize(output_file) > 10:
-        print(f"[{locale}] Negative samples file already exists. Skipping creation.")
+        # print(f"[{locale}] Negative samples file already exists. Skipping creation.")
         return
     target_product_ids = sessions_df['next_item'].unique()
     valid_target_ids = [pid for pid in target_product_ids if pid in prod_id_to_emb_idx_map]
@@ -54,7 +55,7 @@ def create_negative_samples_for_locale(locale, sessions_df, faiss_index, prod_id
     num_workers = psutil.cpu_count(logical=True)
     # reduce_workers = 0.5
     # num_workers = max(1, int(num_workers * reduce_workers) if reduce_workers < 1 else max(1, int(num_workers)))
-    # print(f"[{locale}] Using {num_workers} CPU cores for parallel processing.")
+    print(f"[{locale}] Using {num_workers} CPU cores for parallel processing.")
 
     worker_fn = partial(_generate_for_product, 
                         faiss_index=faiss_index, 

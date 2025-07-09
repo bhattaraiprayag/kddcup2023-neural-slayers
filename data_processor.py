@@ -2,8 +2,9 @@
 
 import os
 import re
-import pandas as pd
 from typing import List, Tuple
+
+import pandas as pd
 
 
 def handle_data(

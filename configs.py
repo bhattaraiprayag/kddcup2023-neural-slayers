@@ -2,7 +2,6 @@
 
 import os
 
-
 # Configuration
 SEED = 183
 NUM_RECOMMENDATIONS = 100
@@ -18,6 +17,7 @@ EMBED_PATH = os.path.join(OUTPUT_PATH, 'embedding/')
 INDEX_PATH = os.path.join(OUTPUT_PATH, 'index/')
 MODELS_PATH = os.path.join(OUTPUT_PATH, 'models/')
 NEGATIVE_SAMPLES_PATH = os.path.join(OUTPUT_PATH, 'negative_samples/')
+P2P_GRAPH_PATH = os.path.join(OUTPUT_PATH, 'graphs/')
 
 COMBINED_FEATURES = ['title', 'locale', 'brand', 'color', 'price', 'model', 'material', 'desc',]
 PROD_DTYPES = {'id':'object', 'locale':'object', 'title':'object', 'price':'float64', 'brand':'object', 'color':'object', 'size':'object', 'model':'object', 'material':'object', 'author':'object', 'desc':'object'}
@@ -48,7 +48,7 @@ TRIPLET_MARGIN = 0.75
 
 
 # Prototyping Parameters
-SLICER = 10000
+SLICER = 20000
 PRED_SLICER = SLICER
 # USE_SLICER = USE_PRED_SLICER = True
 USE_SLICER = USE_PRED_SLICER = False

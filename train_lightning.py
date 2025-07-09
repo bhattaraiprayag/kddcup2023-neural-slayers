@@ -1,39 +1,40 @@
 # train_lightning.py
 
-import os
-import torch
-import pickle
 import importlib
+import os
+import pickle
+
 import numpy as np
 import pandas as pd
 import pytorch_lightning as pl
-from torch.utils.data import DataLoader
+import torch
 from tqdm import tqdm
 
 torch.set_float32_matmul_precision('medium')
 
 import configs
-importlib.reload(configs)
-from configs import (
-    SEED, NUM_RECOMMENDATIONS, N_COMPONENTS, TASK, LOCALES,
-    MODELS_PATH, NEGATIVE_SAMPLES_PATH,
-    BATCH_SIZE, EPOCHS, MAX_SESSION_LENGTH, LEARNING_RATE,
-    GRU_HIDDEN_UNITS, GRU_NUM_LAYERS,   # Model #1
-    NUM_HEADS, ENC_LAYERS, DIM_FFN, # Model #2
-    TOTAL_NEGATIVE_SAMPLES, HARD_NEGATIVE_RATIO, NUM_NEGATIVES, TRIPLET_MARGIN,
-    SLICER, PRED_SLICER, USE_SLICER, USE_PRED_SLICER
-)
-
-import prepare_artefacts
-import negative_sampler
 import dataset
+import negative_sampler
+import prepare_artefacts
+import utils
+from configs import (BATCH_SIZE, DIM_FFN, ENC_LAYERS,
+                     EPOCHS, GRU_HIDDEN_UNITS, GRU_NUM_LAYERS,
+                     HARD_NEGATIVE_RATIO, LEARNING_RATE, LOCALES,
+                     MAX_SESSION_LENGTH, MODELS_PATH, N_COMPONENTS,
+                     NEGATIVE_SAMPLES_PATH, NUM_HEADS, NUM_NEGATIVES,
+                     NUM_RECOMMENDATIONS, PRED_SLICER, SEED, SLICER, TASK,
+                     TOTAL_NEGATIVE_SAMPLES, TRIPLET_MARGIN, USE_PRED_SLICER,
+                     USE_SLICER)
+
+importlib.reload(configs)
 importlib.reload(prepare_artefacts)
 importlib.reload(negative_sampler)
 importlib.reload(dataset)
+importlib.reload(utils)
 
-from negative_sampler import create_negative_samples_for_locale
-from dataset import SessionDataset
 from lightning_model import LightningTwoTower
+from negative_sampler import create_negative_samples_for_locale
+from utils import model_tuner
 
 
 def main():
@@ -69,8 +70,8 @@ def main():
         with open(neg_samples_path, 'rb') as f:
             neg_samples_map = pickle.load(f)
 
-        train_dataset = SessionDataset(locale_data['sessions'], id_to_idx, neg_samples_map, MAX_SESSION_LENGTH, NUM_NEGATIVES)
-        train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=os.cpu_count())
+        # train_dataset = SessionDataset(locale_data['sessions'], id_to_idx, neg_samples_map, MAX_SESSION_LENGTH, NUM_NEGATIVES)
+        # train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=int(os.cpu_count() // 2), pin_memory=True)
 
         embedding_dim = locale_data['embeddings'].shape[1]
         precomputed_embeddings = torch.FloatTensor(locale_data['embeddings'])
@@ -83,7 +84,12 @@ def main():
             precomputed_embeddings=precomputed_embeddings,
             learning_rate=LEARNING_RATE,
             triplet_margin=TRIPLET_MARGIN,
-            num_negatives=NUM_NEGATIVES
+            train_sessions_df=locale_data['sessions'],
+            id_to_idx=id_to_idx,
+            neg_samples_map=neg_samples_map,
+            max_session_length=MAX_SESSION_LENGTH,
+            num_negatives=NUM_NEGATIVES,
+            batch_size=BATCH_SIZE
         )
 
         # # # DEBUG:
@@ -99,16 +105,22 @@ def main():
             strategy="auto",
             logger=True,
         )
+        tuned_model = model_tuner(
+            model=model,
+            pl_trainer=trainer,
+            orig_lr=LEARNING_RATE,
+            init_bs=BATCH_SIZE,
+        )
 
-        print(f"[{locale}] Training model for {EPOCHS} epochs...")
-        trainer.fit(model, train_loader)
-        
+        # print(f"[{locale}] Training model for {EPOCHS} epochs...")
+        trainer.fit(tuned_model)
+
         os.makedirs(MODELS_PATH, exist_ok=True)
         model_save_path = os.path.join(MODELS_PATH, f'query_tower_{locale}.pt')
         torch.save(model.query_tower.state_dict(), model_save_path)
 
-        # PREDICTION
-        print(f"[{locale}] Generating predictions...")
+        # # PREDICTION
+        # print(f"[{locale}] Generating predictions...")
         query_tower = model.query_tower.to('cpu')
         query_tower.eval()
         test_sessions_df = locale_data['sessions_test']
@@ -134,7 +146,7 @@ def main():
 
         all_predictions.extend([(idx, preds, locale) for idx, preds in zip(test_sessions_df.index, locale_predictions)])
 
-    print("\n--- Combining all predictions and saving submission file ---")
+    # print("\n--- Combining all predictions and saving submission file ---")
     if not all_predictions:
         print("No predictions were generated. Exiting.")
         return
@@ -155,8 +167,9 @@ def main():
 
     submission_file = os.path.join(configs.OUTPUT_PATH, 'submission.parquet')
     submission_df.to_parquet(submission_file)
-    print(f"Submission file saved to: {submission_file}")
-    print(f"Submission file shape: {submission_df.shape}")
+    # print(f"Submission file saved to: {submission_file}")
+    # print(f"Submission file shape: {submission_df.shape}")
+
 
 if __name__ == '__main__':
     main()
