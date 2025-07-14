@@ -68,7 +68,7 @@ class LightningTwoTower(pl.LightningModule):
         )
         return DataLoader(
             train_dataset, batch_size=self.hparams.batch_size, shuffle=True,
-            num_workers=int(os.cpu_count() // 2), pin_memory=True
+            num_workers=min(16, int(os.cpu_count() // 2)), pin_memory=True
         )
 
     @property

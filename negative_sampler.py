@@ -69,4 +69,3 @@ def create_negative_samples_for_locale(locale, sessions_df, faiss_index, prod_id
             negative_samples_map[product_id] = negatives
     with open(output_file, 'wb') as f:
         pickle.dump(negative_samples_map, f)
-

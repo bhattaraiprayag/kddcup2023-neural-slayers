@@ -23,13 +23,15 @@ importlib.reload(data_utils)
 importlib.reload(faiss_index)
 importlib.reload(gen_emb)
 from configs import (
-    BATCH_SIZE, COMBINED_FEATURES, DATA_PATH, EMBED_PATH, P2P_GRAPH_PATH, INDEX_PATH, LOCALES, N_COMPONENTS, NUM_RECOMMENDATIONS, OUTPUT_PATH, PRED_SLICER, PROD_DTYPES, SEED, SESS_DTYPES, SLICER, TASK, TEST_PATH, TRAIN_PATH, USE_PRED_SLICER, USE_SLICER
+    BATCH_SIZE, COMBINED_FEATURES, DATA_PATH, EMBED_PATH, P2P_GRAPH_PATH, INDEX_PATH, LOCALES, N_COMPONENTS, NUM_RECOMMENDATIONS, OUTPUT_PATH, PRED_SLICER, PROD_DTYPES, SEED, SESS_DTYPES, SLICER, TASK, TEST_PATH, TRAIN_PATH, USE_PRED_SLICER, USE_SLICER, GRAPH_TYPE
 )
 from data_processor import handle_data
 from data_utils import scale_prices, split_locales
 from faiss_index import create_locale_indices
 from gen_emb import load_locale_embeddings
 from session_graph_builder import ProductGraphBuilder
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 def reduce_embeddings(embeddings, n_components, random_state):
@@ -66,7 +68,7 @@ def prepare_locale_artefacts():
     for locale in LOCALES:
         locale_embed_path = os.path.join(EMBED_PATH, f'products_{locale}.npy')
         locale_faiss_path = os.path.join(INDEX_PATH, f'products_{locale}.faiss')
-        locale_p2p_graph_path = os.path.join(P2P_GRAPH_PATH, f'graph_pmi_{locale}.gpickle')
+        locale_p2p_graph_path = os.path.join(P2P_GRAPH_PATH, f'graph_{GRAPH_TYPE}_{locale}.gpickle')
 
         full_embeddings = load_locale_embeddings(
             locale=locale,
@@ -94,9 +96,9 @@ def prepare_locale_artefacts():
         )
 
         if not os.path.exists(locale_p2p_graph_path):
-            graph_builder = ProductGraphBuilder(sessions_by_locale[locale])
+            graph_builder = ProductGraphBuilder(sessions_by_locale[locale], products_by_locale[locale])
             p2p_graph = graph_builder.build_graph(
-                weight_type='pmi',
+                weight_type='pmi-hybrid',
                 num_workers=-1,
                 session_slice=SLICER if USE_SLICER else None
             )
