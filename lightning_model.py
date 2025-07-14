@@ -5,6 +5,7 @@ import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
 from models import TwoTowerModel
 from dataset import SessionDataset
@@ -56,12 +57,24 @@ class LightningTwoTower(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.hparams.learning_rate)
-        return optimizer
+        # return optimizer
+        scheduler = CosineAnnealingWarmRestarts(
+            optimizer,
+            T_0=50,  # Number of epochs for the first restart
+            T_mult=2,  # Factor to increase T_0 after each restart
+            eta_min=1e-8  # Minimum learning rate
+        )
+        return {
+            'optimizer': optimizer,
+            'lr_scheduler': {
+                'scheduler': scheduler,
+                'monitor': 'train_loss'
+            }
+        }
 
     def train_dataloader(self):
         if self.train_sessions_df is None:
             return None
-
         train_dataset = SessionDataset(
             self.train_sessions_df, self.id_to_idx, self.neg_samples_map,
             self.max_session_length, self.hparams.num_negatives
