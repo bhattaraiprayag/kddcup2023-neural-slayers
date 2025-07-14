@@ -30,7 +30,6 @@ class LightningTwoTower(pl.LightningModule):
         self.id_to_idx = id_to_idx
         self.neg_samples_map = neg_samples_map
         self.max_session_length = max_session_length
-
         self.two_tower_model = TwoTowerModel(
             embedding_dim=embedding_dim,
             nhead=nhead,
@@ -52,25 +51,25 @@ class LightningTwoTower(pl.LightningModule):
         for neg_emb in torch.unbind(neg_emb_batch, dim=1):
             loss += self.loss_fn(session_emb, pos_emb, neg_emb)
         loss /= self.hparams.num_negatives
-        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
         return loss
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.hparams.learning_rate)
-        # return optimizer
-        scheduler = CosineAnnealingWarmRestarts(
-            optimizer,
-            T_0=50,  # Number of epochs for the first restart
-            T_mult=2,  # Factor to increase T_0 after each restart
-            eta_min=1e-8  # Minimum learning rate
-        )
-        return {
-            'optimizer': optimizer,
-            'lr_scheduler': {
-                'scheduler': scheduler,
-                'monitor': 'train_loss'
-            }
-        }
+        return optimizer
+        # scheduler = CosineAnnealingWarmRestarts(
+        #     optimizer,
+        #     T_0=50,  # Number of epochs for the first restart
+        #     T_mult=2,  # Factor to increase T_0 after each restart
+        #     eta_min=1e-8  # Minimum learning rate
+        # )
+        # return {
+        #     'optimizer': optimizer,
+        #     'lr_scheduler': {
+        #         'scheduler': scheduler,
+        #         'monitor': 'train_loss'
+        #     }
+        # }
 
     def train_dataloader(self):
         if self.train_sessions_df is None:

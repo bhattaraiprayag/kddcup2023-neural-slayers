@@ -41,3 +41,22 @@ class SessionDataset(Dataset):
             torch.tensor(label_idx, dtype=torch.long),
             torch.tensor(negative_indices, dtype=torch.long)
         )
+
+
+class PredictionDataset(Dataset):
+    def __init__(self, sessions, id_map, max_len):
+        self.sessions = sessions
+        self.id_map = id_map
+        self.max_len = max_len
+
+    def __len__(self):
+        return len(self.sessions)
+
+    def __getitem__(self, idx):
+        session = self.sessions[idx]
+        session_indices = [self.id_map.get(item, 0) for item in session]
+        if len(session_indices) > self.max_len:
+            session_indices = session_indices[-self.max_len:]
+        else:
+            session_indices = [0] * (self.max_len - len(session_indices)) + session_indices
+        return torch.tensor(session_indices, dtype=torch.long)
