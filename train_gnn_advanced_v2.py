@@ -1,3 +1,5 @@
+# train_gnn_advanced_v2.py - This version uses a different data splitting strategy using RandomLinkSplit and LinkNeighborLoader
+
 import time
 import os
 import pickle

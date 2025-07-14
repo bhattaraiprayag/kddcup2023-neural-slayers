@@ -104,7 +104,7 @@ def main():
             num_negatives=NUM_NEGATIVES, batch_size=BATCH_SIZE
         )
 
-        trainer = pl.Trainer(max_epochs=EPOCHS, accelerator="auto", devices="auto", strategy="auto", logger=True)
+        trainer = pl.Trainer(max_epochs=EPOCHS, accelerator="auto", devices="auto", strategy="auto")
         tuned_model = model_tuner(model=model, pl_trainer=trainer, orig_lr=LEARNING_RATE, init_bs=BATCH_SIZE)
 
         print(f"[{locale}] Training model for {EPOCHS} epochs...")
