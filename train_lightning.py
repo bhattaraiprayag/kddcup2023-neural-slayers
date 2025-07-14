@@ -4,6 +4,7 @@ import importlib
 import os
 import pickle
 
+import faiss
 import numpy as np
 import pandas as pd
 import pytorch_lightning as pl
@@ -23,10 +24,13 @@ from configs import (BATCH_SIZE, DIM_FFN, ENC_LAYERS,
                      EPOCHS, LEARNING_RATE, LOCALES,
                      MAX_SESSION_LENGTH, MODELS_PATH,
                      NEGATIVE_SAMPLES_PATH, NUM_HEADS, NUM_NEGATIVES,
-                     NUM_RECOMMENDATIONS, SEED, TRIPLET_MARGIN)
+                     NUM_RECOMMENDATIONS, SEED, TRIPLET_MARGIN,
+                     PRED_SLICER, SLICER, USE_PRED_SLICER, USE_SLICER)
 from lightning_model import LightningTwoTower
 from negative_sampler import create_negative_samples_for_locale
 from utils import model_tuner
+from dataset import PredictionDataset
+from gen_emb import load_locale_embeddings
 
 importlib.reload(configs)
 importlib.reload(prepare_artefacts)
@@ -46,7 +50,7 @@ def main():
     for locale in LOCALES:
         create_negative_samples_for_locale(
             locale,
-            all_locale_data[locale]['sessions'],
+            all_locale_data[locale]['sessions'] if not USE_SLICER else all_locale_data[locale]['sessions'][:SLICER],
             all_locale_data[locale]['faiss_index'],
             all_locale_data[locale]['prod_id_to_emb_idx_map'],
             NEGATIVE_SAMPLES_PATH
@@ -60,11 +64,10 @@ def main():
 
         enhanced_embed_path = os.path.join(configs.EMBED_PATH, f'enhanced_embeddings_{locale}.npy')
         if os.path.exists(enhanced_embed_path):
-            print(f"Found and loading GNN-enhanced embeddings from {enhanced_embed_path}")
             locale_data['embeddings'] = np.load(enhanced_embed_path)
+            faiss.normalize_L2(locale_data['embeddings'])
             locale_faiss_path = os.path.join(configs.INDEX_PATH, f'products_{locale}_enhanced.faiss')
             if os.path.exists(locale_faiss_path):
-                print(f"Loading existing FAISS index from {locale_faiss_path}")
                 faiss_index_object = faiss_index.load_index(
                     locale_faiss_path
                 )
@@ -79,7 +82,6 @@ def main():
                     batch_size=configs.BATCH_SIZE
                 )
                 locale_data['faiss_index'] = faiss_index_object
-                print(f"New FAISS index created with {locale_data['faiss_index'].ntotal} vectors.")
         else:
             print("GNN-enhanced embeddings not found. Using SVD-reduced embeddings as fallback.")
 
@@ -114,40 +116,53 @@ def main():
         model_save_path = os.path.join(MODELS_PATH, f'query_tower_{locale}.pt')
         torch.save(model.query_tower.state_dict(), model_save_path)
 
-        print(f"[{locale}] Generating predictions...")
         query_tower = model.query_tower.to('cpu')
         query_tower.eval()
         test_sessions_df = locale_data['sessions_test']
         test_sessions = test_sessions_df['prev_items'].str.split(',').tolist()
+        if USE_PRED_SLICER:
+            test_sessions = test_sessions[:PRED_SLICER]
+
+        pred_dataset = PredictionDataset(
+            sessions=test_sessions,
+            id_map=locale_data['prod_id_to_emb_idx_map'],
+            max_len=MAX_SESSION_LENGTH
+        )
+        pred_loader = DataLoader(
+            pred_dataset, batch_size=BATCH_SIZE*4, shuffle=False,
+            num_workers=min(16, int(os.cpu_count() // 2)), pin_memory=True
+        )
 
         locale_predictions = []
         with torch.no_grad():
-            for session in tqdm(test_sessions, desc=f"[{locale}] Predicting"):
-                session_indices = [locale_data['prod_id_to_emb_idx_map'].get(item, 0) for item in session]
-                if len(session_indices) > MAX_SESSION_LENGTH:
-                    session_indices = session_indices[-MAX_SESSION_LENGTH:]
-                else:
-                    session_indices = [0] * (MAX_SESSION_LENGTH - len(session_indices)) + session_indices
-                session_tensor = torch.tensor([session_indices], dtype=torch.long)
-                session_emb = query_tower(session_tensor).cpu().numpy()
-                _, I = locale_data['faiss_index'].search(session_emb, NUM_RECOMMENDATIONS)
-                predicted_product_ids = [emb_idx_to_id[i] for i in I[0] if i in emb_idx_to_id]
-                locale_predictions.append(predicted_product_ids)
-
+            for session_batch in tqdm(pred_loader, desc=f"[{locale}] Predicting"):
+                session_tensor = session_batch.to('cpu')
+                session_emb_batch = query_tower(session_tensor).cpu().numpy()
+                _, I_batch = locale_data['faiss_index'].search(session_emb_batch, NUM_RECOMMENDATIONS)
+                for recommendations_indices in I_batch:
+                    predicted_ids = [emb_idx_to_id[i] for i in recommendations_indices if i in emb_idx_to_id]
+                    locale_predictions.append(predicted_ids)
         all_predictions.extend([(idx, preds) for idx, preds in zip(test_sessions_df.index, locale_predictions)])
 
-    print("\n--- Combining all predictions and saving submission file ---")
     if not all_predictions:
         print("No predictions were generated. Exiting.")
         return
 
     all_predictions.sort(key=lambda x: x[0])
     sorted_predictions = [p[1] for p in all_predictions]
-    
-    submission_df = pd.DataFrame({'next_item_prediction': sorted_predictions})
-    submission_file = os.path.join(configs.OUTPUT_PATH, 'submission.parquet')
+    if USE_PRED_SLICER:
+        original_test_df = pd.concat([all_locale_data[loc]['sessions_test'][:PRED_SLICER] for loc in LOCALES]).sort_index()
+    else:
+        original_test_df = pd.concat([all_locale_data[loc]['sessions_test'] for loc in LOCALES]).sort_index()
+    locales = [loc for _, _, loc in sorted(all_predictions, key=lambda x: x[0])]
+    submission_df = pd.DataFrame({
+        'next_item_prediction': sorted_predictions,
+        'locale': locales
+    }, index=original_test_df.index)
+    submission_file = os.path.join(configs.OUTPUT_PATH, 'submission_new.parquet')
     submission_df.to_parquet(submission_file)
     print(f"Submission file saved to: {submission_file}")
+    print(f"Submission file shape: {submission_df.shape}")
 
 
 if __name__ == '__main__':
