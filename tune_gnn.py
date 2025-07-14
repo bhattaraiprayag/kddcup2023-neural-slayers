@@ -56,7 +56,7 @@ def load_all_data(locales, device):
         pyg_data.edge_index, pyg_data.edge_attr = edge_index, edge_weight
         pyg_data.num_nodes = num_nodes
         transform = RandomLinkSplit(
-            is_undirected=True, num_val=0.1, num_test=0.1, add_negative_train_samples=True, neg_sampling_ratio=1.0
+            is_undirected=True, num_val=0.15, num_test=0.15, add_negative_train_samples=True, neg_sampling_ratio=1.0
         )
         train_data, val_data, test_data = transform(pyg_data)
         all_data[locale] = {
@@ -142,7 +142,7 @@ def run_trial(locale, params, data, device):
     best_val_auc = 0
     patience, max_patience = 0, 50
     history = {'train_loss': [], 'train_auc': [], 'val_auc': []}
-    model_save_path = os.path.join("outputs", "tuning", "models", f'best_gnn_{trial_id}.pt')
+    model_save_path = os.path.join("outputs", "tuning", "models", f'best_gnn_{locale}_{trial_id}.pt')
     os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
     start_time = time.time()
     with tqdm(range(1, gnn_epochs + 1), unit="epoch", desc=f"Training {trial_id}") as pbar:
@@ -204,9 +204,9 @@ def main():
 
     # --- Hyperparameter Search Space ---
     param_grid = {
-        'lr': [1e-1, 1e-2, 1e-3, 1e-4, 1e-5],
-        'weight_decay': [1e-1, 1e-2, 1e-3, 1e-4, 1e-5],
-        'hidden_channels_factor': [1, 2],
+        'lr': [1e-1, 1e-2],
+        'weight_decay': [1e-1, 1e-2, 1e-3, 1e-4],
+        'hidden_channels_factor': [2],
         'scheduler': ['ReduceLROnPlateau', 'OneCycleLR', 'CosineAnnealingWarmRestarts']
     }
 

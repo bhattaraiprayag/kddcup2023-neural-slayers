@@ -2,7 +2,7 @@
 
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import SAGEConv, LayerNorm
+from torch_geometric.nn import LayerNorm
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.utils import degree
 
@@ -31,6 +31,7 @@ class WeightedSAGEConv(MessagePassing):
         return edge_weight.view(-1, 1) * x_j
 
 
+# class GraphSAGE_Old(nn.Module):
 class GraphSAGE(nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5):
         super().__init__()
@@ -51,6 +52,7 @@ class GraphSAGE(nn.Module):
         return (z[edge_label_index[0]] * z[edge_label_index[1]]).sum(dim=-1)
 
 
+# class GraphSAGE(nn.Module):
 class GraphSAGE_new(nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5):
         super().__init__()
