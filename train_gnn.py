@@ -20,24 +20,42 @@ from prepare_artefacts import prepare_locale_artefacts
 
 
 def plot_and_save_history(history, locale, scheduler_name):
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
+    plt.style.use('seaborn-v0_8-whitegrid')
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 9), sharex=True)
     epochs = range(1, len(history['train_loss']) + 1)
-    ax1.plot(epochs, history['train_loss'], 'bo-', label='Train Loss')
+    fig.suptitle(f'GraphSAGE Training Metrics for {locale} w/ {scheduler_name}', fontsize=16)
+    ax1.plot(epochs, history['train_loss'], 
+             color='dodgerblue',
+             marker='o',
+             linestyle='-',
+             linewidth=1.5,
+             markersize=3)
+    ax1.set_title('Training Loss over Epochs')
     ax1.set_ylabel('BCE Loss')
-    ax1.set_title(f'GraphSAGE Training and Validation Metrics for {locale}')
-    ax1.legend()
-    ax1.grid(True)
-    ax2.plot(epochs, history['train_auc'], 'go-', label='Train AUC')
-    ax2.plot(epochs, history['val_auc'], 'ro-', label='Validation AUC')
+    ax1.legend(['Training Loss'])
+    ax2.plot(epochs, history['train_auc'],
+             color='green',
+             marker='o',
+             linestyle='-',
+             linewidth=1.5,
+             markersize=3,
+             label='Training AUC')
+    ax2.plot(epochs, history['val_auc'],
+             color='red',
+             marker='o',
+             linestyle='--',
+             linewidth=1.5,
+             markersize=3,
+             label='Validation AUC')
+    ax2.set_title('Area Under Curve (AUC) Performance')
     ax2.set_xlabel('Epochs')
-    ax2.set_ylabel('AUC')
+    ax2.set_ylabel('AUC Score')
     ax2.legend()
-    ax2.grid(True)
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
     plot_save_path = os.path.join("outputs", "plots", f'gnn_training_history_{locale}_{scheduler_name}.png')
     os.makedirs(os.path.dirname(plot_save_path), exist_ok=True)
-    plt.savefig(plot_save_path)
-    plt.close()
+    plt.savefig(plot_save_path, dpi=600)
+    plt.close(fig)
 
 
 def train(model, optimizer, criterion, data):
@@ -85,7 +103,6 @@ def main():
             if pid in prod_id_to_emb_idx:
                 emb_idx = prod_id_to_emb_idx[pid]
                 node_features[i] = torch.tensor(initial_embeddings[emb_idx])
-
         pyg_data = from_networkx(nx_graph)
         pyg_data.x = node_features
         edge_index = torch.tensor([
@@ -95,9 +112,8 @@ def main():
         edge_weight = torch.tensor([d.get('weight', 1.0) for _, _, d in nx_graph.edges(data=True)], dtype=torch.float)
         pyg_data.edge_index, pyg_data.edge_attr = edge_index, edge_weight
         pyg_data.num_nodes = num_nodes
-
         transform = RandomLinkSplit(
-            is_undirected=True, num_val=0.1, num_test=0.1, add_negative_train_samples=True, neg_sampling_ratio=1.0
+            is_undirected=True, num_val=0.15, num_test=0.15, add_negative_train_samples=True, neg_sampling_ratio=1.0
         )
         train_data, val_data, test_data = transform(pyg_data)
         train_data, val_data, test_data = train_data.to(device), val_data.to(device), test_data.to(device)
@@ -109,21 +125,20 @@ def main():
             out_channels=N_COMPONENTS
         ).to(device)
 
-        gnn_epochs = 1000
-        # gnn_epochs = 10
+        # gnn_epochs = 1000
+        gnn_epochs = 50
 
         optimizer = torch.optim.AdamW(
             params=model.parameters(),
             lr=LEARNING_RATE,
-            weight_decay=1e-2
+            weight_decay=1e-3
         )
-        # scheduler_patience = 5
-        # scheduler = ReduceLROnPlateau(
-        #     optimizer, mode='max', factor=0.5, patience=scheduler_patience, min_lr=1e-10
+        scheduler = ReduceLROnPlateau(
+            optimizer, mode='max', factor=0.5, patience=5, min_lr=1e-10
+        )
+        # scheduler = OneCycleLR(
+        #     optimizer, max_lr=LEARNING_RATE, epochs=gnn_epochs, steps_per_epoch=1,
         # )
-        scheduler = OneCycleLR(
-            optimizer, max_lr=LEARNING_RATE, epochs=gnn_epochs, steps_per_epoch=1,
-        )
         # scheduler = CosineAnnealingWarmRestarts(
         #     optimizer,
         #     T_0=50,  # Number of epochs for the first restart
@@ -150,10 +165,8 @@ def main():
                 history['train_auc'].append(train_auc)
                 history['val_auc'].append(val_auc)
                 scheduler.step(val_auc) if isinstance(scheduler, ReduceLROnPlateau) else scheduler.step()
-                # print(scheduler.get_last_lr())
                 if scheduler.get_last_lr() != running_lr:
                     running_lr = scheduler.get_last_lr()
-                    # print(running_lr)
                 pbar.set_postfix(train_auc=f"{train_auc:.4f}", val_auc=f"{val_auc:.4f}", best_val_auc=f"{best_val_auc:.4f}")
                 if val_auc > best_val_auc:
                     best_val_auc = val_auc

@@ -16,6 +16,7 @@ class PositionalEncoding(nn.Module):
         pe[:, 0, 0::2] = torch.sin(position * div_term)
         pe[:, 0, 1::2] = torch.cos(position * div_term)
         self.register_buffer('pe', pe)
+
     def forward(self, x):
         x = x + self.pe[:x.size(1)].transpose(0, 1)
         return self.dropout(x)
@@ -37,6 +38,7 @@ class SessionEncoder(nn.Module):
             num_layers=num_encoder_layers
         )
         self.layer_norm = nn.LayerNorm(embedding_dim)
+
     def forward(self, embedded_session):
         seq_len = embedded_session.size(1)
         causal_mask = nn.Transformer.generate_square_subsequent_mask(seq_len).to(embedded_session.device)
@@ -49,8 +51,10 @@ class SessionEncoder(nn.Module):
 class QueryTower(nn.Module):
     def __init__(self, embedding_dim, nhead, num_encoder_layers, dim_feedforward, precomputed_embeddings, dropout=0.1):
         super().__init__()
-        self.item_embeddings = nn.Embedding.from_pretrained(precomputed_embeddings, freeze=True)
+        # self.item_embeddings = nn.Embedding.from_pretrained(precomputed_embeddings, freeze=True)
+        self.item_embeddings = nn.Embedding.from_pretrained(precomputed_embeddings)
         self.session_encoder = SessionEncoder(embedding_dim, nhead, num_encoder_layers, dim_feedforward, dropout)
+
     def forward(self, session_item_indices):
         embedded_session = self.item_embeddings(session_item_indices)
         session_vector = self.session_encoder(embedded_session)
@@ -61,6 +65,7 @@ class TwoTowerModel(nn.Module):
     def __init__(self, embedding_dim, nhead, num_encoder_layers, dim_feedforward, precomputed_embeddings, dropout=0.1):
         super().__init__()
         self.query_tower = QueryTower(embedding_dim, nhead, num_encoder_layers, dim_feedforward, precomputed_embeddings, dropout)
+
     def forward(self, session_indices, positive_item_indices, negative_item_indices):
         session_embedding = self.query_tower(session_indices)
         positive_item_embedding = self.query_tower.item_embeddings(positive_item_indices).squeeze(1)

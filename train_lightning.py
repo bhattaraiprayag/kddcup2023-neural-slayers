@@ -30,7 +30,6 @@ from lightning_model import LightningTwoTower
 from negative_sampler import create_negative_samples_for_locale
 from utils import model_tuner
 from dataset import PredictionDataset
-from gen_emb import load_locale_embeddings
 
 importlib.reload(configs)
 importlib.reload(prepare_artefacts)
@@ -46,18 +45,8 @@ def main():
     print("\n--- Preparing artefacts (data, embeddings, FAISS indices) ---")
     all_locale_data = prepare_artefacts.prepare_locale_artefacts()
 
-    print("\n--- Generating/retrieving negative samples ---")
-    for locale in LOCALES:
-        create_negative_samples_for_locale(
-            locale,
-            all_locale_data[locale]['sessions'] if not USE_SLICER else all_locale_data[locale]['sessions'][:SLICER],
-            all_locale_data[locale]['faiss_index'],
-            all_locale_data[locale]['prod_id_to_emb_idx_map'],
-            NEGATIVE_SAMPLES_PATH
-        )
-
-    all_predictions = []
     print("\n--- Training a model and predicting for each locale ---")
+    all_predictions = []
     for locale in LOCALES:
         print(f"\n===== Processing locale: {locale} =====")
         locale_data = all_locale_data[locale]
@@ -91,6 +80,15 @@ def main():
         emb_idx_to_id = {v: k for k, v in locale_data['prod_id_to_emb_idx_map'].items()}
 
         neg_samples_path = os.path.join(NEGATIVE_SAMPLES_PATH, f'negative_samples_{locale}.pkl')
+        if not os.path.exists(neg_samples_path):
+            print("\n--- Generating negative samples ---")
+            create_negative_samples_for_locale(
+                locale,
+                locale_data['sessions'] if not USE_SLICER else locale_data['sessions'][:SLICER],
+                locale_data['faiss_index'],
+                locale_data['prod_id_to_emb_idx_map'],
+                NEGATIVE_SAMPLES_PATH
+            )
         with open(neg_samples_path, 'rb') as f:
             neg_samples_map = pickle.load(f)
 
@@ -142,7 +140,7 @@ def main():
                 for recommendations_indices in I_batch:
                     predicted_ids = [emb_idx_to_id[i] for i in recommendations_indices if i in emb_idx_to_id]
                     locale_predictions.append(predicted_ids)
-        all_predictions.extend([(idx, preds) for idx, preds in zip(test_sessions_df.index, locale_predictions)])
+        all_predictions.extend([(idx, preds, locale) for idx, preds in zip(test_sessions_df.index, locale_predictions)])
 
     if not all_predictions:
         print("No predictions were generated. Exiting.")
@@ -150,11 +148,11 @@ def main():
 
     all_predictions.sort(key=lambda x: x[0])
     sorted_predictions = [p[1] for p in all_predictions]
+    locales = [p[2] for p in all_predictions]
     if USE_PRED_SLICER:
         original_test_df = pd.concat([all_locale_data[loc]['sessions_test'][:PRED_SLICER] for loc in LOCALES]).sort_index()
     else:
         original_test_df = pd.concat([all_locale_data[loc]['sessions_test'] for loc in LOCALES]).sort_index()
-    locales = [loc for _, _, loc in sorted(all_predictions, key=lambda x: x[0])]
     submission_df = pd.DataFrame({
         'next_item_prediction': sorted_predictions,
         'locale': locales

@@ -53,8 +53,8 @@ def create_negative_samples_for_locale(locale, sessions_df, faiss_index, prod_id
     all_indices_array = np.array(list(emb_idx_to_prod_id.keys()), dtype=np.int32)
     negative_samples_map = {}
     num_workers = psutil.cpu_count(logical=True)
-    # reduce_workers = 0.5
-    # num_workers = max(1, int(num_workers * reduce_workers) if reduce_workers < 1 else max(1, int(num_workers)))
+    reduce_workers = 0.75
+    num_workers = max(1, int(num_workers * reduce_workers) if reduce_workers < 1 else max(1, int(num_workers)))
     print(f"[{locale}] Using {num_workers} CPU cores for parallel processing.")
 
     worker_fn = partial(_generate_for_product, 

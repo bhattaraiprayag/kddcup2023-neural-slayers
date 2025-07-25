@@ -1,10 +1,14 @@
-# tune_gnn.py
+# tune_gnn_multi.py
 
 import itertools
 import os
 import pickle
 import time
 from datetime import datetime
+
+import multiprocessing as mp
+from multiprocessing import Queue
+import queue
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -23,6 +27,26 @@ from configs import (EMBED_PATH, GRAPH_TYPE, LOCALES, N_COMPONENTS,
                      P2P_GRAPH_PATH, SEED)
 from gnn_model import GraphSAGE
 from prepare_artefacts import prepare_locale_artefacts
+
+
+def worker(job_queue, results_queue, gpu_id, all_locale_data):
+    device = torch.device(f'cuda:{gpu_id}')
+    print(f"Worker started on GPU: {gpu_id}")
+    while True:
+        try:
+            locale, params = job_queue.get_nowait()
+        except queue.Empty:
+            print(f"Worker on GPU {gpu_id} found no more jobs. Exiting.")
+            break
+        except Exception as e:
+            print(f"Error getting job on GPU {gpu_id}: {e}")
+            continue
+        try:
+            data_on_device = {k: v.to(device) if hasattr(v, 'to') else v for k, v in all_locale_data[locale].items()}
+            trial_result = run_trial(locale, params, data_on_device, device)
+            results_queue.put(trial_result)
+        except Exception as e:
+            print(f"Error during trial run on GPU {gpu_id} for locale {locale}: {e}")
 
 
 def load_all_data(locales, device):
@@ -146,7 +170,7 @@ def run_trial(locale, params, data, device):
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=params['lr'], weight_decay=params['weight_decay']
     )
-    gnn_epochs = 200
+    gnn_epochs = 100
     if params['scheduler'] == 'ReduceLROnPlateau':
         scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5, min_lr=1e-10)
     elif params['scheduler'] == 'OneCycleLR':
@@ -157,15 +181,13 @@ def run_trial(locale, params, data, device):
         raise ValueError("Invalid scheduler specified")
     criterion = nn.BCEWithLogitsLoss().to(device)
     best_val_auc = 0
-    patience, max_patience = 0, 25
+    patience, max_patience = 0, 50
     history = {'train_loss': [], 'train_auc': [], 'val_auc': []}
-    model_save_path = os.path.join("outputs", "tuning", "models", f"best_gnn_{trial_id}_{(params['scheduler'])}.pt")
+    model_save_path = os.path.join("outputs", "tuning", "models", f'best_gnn_{locale}_{trial_id}.pt')
     os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
-    processed_epochs = 0
     start_time = time.time()
     with tqdm(range(1, gnn_epochs + 1), unit="epoch", desc=f"Training {trial_id}") as pbar:
         for epoch in pbar:
-            processed_epochs = epoch
             loss, train_auc = train_step(model, optimizer, criterion, train_data)
             val_auc = test_step(model, val_data)
             history['train_loss'].append(loss)
@@ -206,7 +228,6 @@ def run_trial(locale, params, data, device):
     return {
         'trial_id': trial_id,
         'locale': locale,
-        'processed_epochs': processed_epochs,
         'best_val_auc': best_val_auc,
         'test_auc': test_auc,
         'training_time_s': training_time,
@@ -219,35 +240,57 @@ def run_trial(locale, params, data, device):
 
 def main():
     pl.seed_everything(SEED, workers=True)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
+    num_gpus = torch.cuda.device_count()
+    print(f"Found {num_gpus} available GPUs.")
 
     # --- Hyperparameter Search Space ---
     param_grid = {
-        'lr': [1e-1, 1e-2, 1e-3, 1e-4],
+        'lr': [1e-1, 1e-2],
         'weight_decay': [1e-1, 1e-2, 1e-3, 1e-4],
         'hidden_channels_factor': [2],
         'scheduler': ['ReduceLROnPlateau', 'OneCycleLR', 'CosineAnnealingWarmRestarts']
     }
 
-    all_locale_data = load_all_data(LOCALES, device)
+    all_locale_data = load_all_data(LOCALES, torch.device('cpu')) # Load data on CPU first
     keys, values = zip(*param_grid.items())
     hyperparameter_combinations = [dict(zip(keys, v)) for v in itertools.product(*values)]
     results = []
-    total_trials = len(LOCALES) * len(hyperparameter_combinations)
-    print(f"\nStarting hyperparameter tuning for {len(LOCALES)} locales.")
-    print(f"Total trials to run: {total_trials}")
-    for locale in LOCALES:
-        if locale not in all_locale_data:
-            print(f"No data for {locale}, skipping.")
-            continue
-        print(f"\n===== Tuning for {locale} =====")
-        locale_data = all_locale_data[locale]
-        for params in hyperparameter_combinations:
-            trial_result = run_trial(locale, params, locale_data, device)
-            results.append(trial_result)
-            results_df = pd.DataFrame(results)
-            results_df.to_csv(os.path.join("outputs", "tuning", "tuning_results.csv"), index=False)
+    if num_gpus > 1:
+        job_queue = Queue()
+        results_queue = Queue()
+        for locale in LOCALES:
+            if locale not in all_locale_data:
+                print(f"No data for {locale}, skipping.")
+                continue
+            for params in hyperparameter_combinations:
+                job_queue.put((locale, params))
+        processes = []
+        for gpu_id in range(num_gpus):
+            p = mp.Process(target=worker, args=(job_queue, results_queue, gpu_id, all_locale_data))
+            processes.append(p)
+            p.start()
+        for p in processes:
+            p.join()
+        while not results_queue.empty():
+            results.append(results_queue.get())
+    else:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print(f"Using device: {device}")
+        total_trials = len(LOCALES) * len(hyperparameter_combinations)
+        print(f"\nStarting hyperparameter tuning for {len(LOCALES)} locales.")
+        print(f"Total trials to run: {total_trials}")
+        for locale in LOCALES:
+            if locale not in all_locale_data:
+                print(f"No data for {locale}, skipping.")
+                continue
+            print(f"\n===== Tuning for {locale} =====")
+            locale_data = {k: v.to(device) if hasattr(v, 'to') else v for k, v in all_locale_data[locale].items()}
+            for params in hyperparameter_combinations:
+                trial_result = run_trial(locale, params, locale_data, device)
+                results.append(trial_result)
+                results_df = pd.DataFrame(results)
+                results_df.to_csv(os.path.join("outputs", "tuning", "tuning_results.csv"), index=False)
+
     print("\n--- Hyperparameter Tuning Complete ---")
     results_df = pd.DataFrame(results)
     results_df.sort_values(by=['locale', 'best_val_auc'], ascending=[True, False], inplace=True)
@@ -257,4 +300,8 @@ def main():
 
 
 if __name__ == '__main__':
+    try:
+        mp.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass
     main()

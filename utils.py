@@ -22,7 +22,12 @@ def model_tuner(
             model, min_lr=min_lr, max_lr=max_lr,
             num_training=test_lr, mode=lr_finder_mode
         )
-        model.hparams.learning_rate = lr_finder.suggestion()
+        suggested_lr = lr_finder.suggestion()
+        if suggested_lr:
+            model.hparams.learning_rate = suggested_lr
+        else:
+            print(f"LR finder failed. Using original learning rate: {orig_lr}")
+            model.hparams.learning_rate = orig_lr
     except Exception as e:
         print(f"Error during learning rate finder: {e}")
         model.hparams.learning_rate = orig_lr

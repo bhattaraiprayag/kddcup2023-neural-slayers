@@ -1,4 +1,4 @@
-# train_gnn_advanced.py
+# train_gnn_advanced_dp.py
 
 import time
 import os
@@ -13,9 +13,11 @@ from torch_geometric.transforms import RandomLinkSplit
 from torch_geometric.utils import from_networkx
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
+from torch_geometric.loader import LinkNeighborLoader
+from torch_geometric.nn import DataParallel
 
 from configs import (EMBED_PATH, LOCALES, N_COMPONENTS, P2P_GRAPH_PATH, SEED, GRAPH_TYPE)
-from gnn_model_advanced import GraphSAGE
+from gnn_model_advanced import GraphSAGE_DP
 from prepare_artefacts import prepare_locale_artefacts
 
 
@@ -58,23 +60,13 @@ def plot_and_save_history(history, locale, scheduler_name):
     plt.close(fig)
 
 
-def train(model, optimizer, criterion, data):
-    model.train()
-    optimizer.zero_grad()
-    z = model(data.x, data.edge_index, data.edge_weight)
-    out = model.decode(z, data.edge_label_index).view(-1)
-    loss = criterion(out, data.edge_label)
-    loss.backward()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-    optimizer.step()
-    return float(loss), roc_auc_score(data.edge_label.detach().cpu().numpy(), out.detach().cpu().numpy())
-
-
 @torch.no_grad()
 def test(model, data):
     model.eval()
-    z = model(data.x, data.edge_index, data.edge_weight)
-    out = model.decode(z, data.edge_label_index).view(-1)
+    inner_model = model.module if isinstance(model, (DataParallel, nn.DataParallel)) else model
+    # z = model(data.x, data.edge_index, data.edge_weight)
+    z = model(data)
+    out = inner_model.decode(z, data.edge_label_index).view(-1)
     return roc_auc_score(data.edge_label.cpu().numpy(), out.cpu().numpy())
 
 
@@ -82,6 +74,7 @@ def main():
     pl.seed_everything(SEED, workers=True)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
+
     all_locale_data = prepare_locale_artefacts()
     for locale in LOCALES:
         print(f"\n===== Processing {locale} =====")
@@ -111,33 +104,49 @@ def main():
             for u, v in nx_graph.edges()
         ], dtype=torch.long).t().contiguous()
         edge_weight = torch.tensor([d.get('weight', 1.0) for _, _, d in nx_graph.edges(data=True)], dtype=torch.float)
-        pyg_data.edge_index, pyg_data.edge_attr = edge_index, pyg_data.edge_weight
+        pyg_data.edge_index, pyg_data.edge_attr, pyg_data.edge_weight = edge_index, edge_weight, edge_weight
         pyg_data.num_nodes = num_nodes
 
         transform = RandomLinkSplit(
-            is_undirected=True, num_val=0.1, num_test=0.1, add_negative_train_samples=True, neg_sampling_ratio=1.0
+            is_undirected=True, num_val=0.15, num_test=0.15, add_negative_train_samples=True, neg_sampling_ratio=1.0
         )
         train_data, val_data, test_data = transform(pyg_data)
-        train_data, val_data, test_data = train_data.to(device), val_data.to(device), test_data.to(device)
-        print(f"Data prep: {time.time() - timer:.2f} seconds | Number of nodes: {num_nodes}, edges: {pyg_data.num_edges}")
 
-        model = GraphSAGE(
+        train_loader = LinkNeighborLoader(
+            data=train_data,
+            num_neighbors=[25, 10],  # Number of neighbors to sample for each layer.
+            batch_size=2048,         # Adjust based on your GPU memory.
+            shuffle=True,
+            neg_sampling_ratio=1.0,
+            edge_label_index=train_data.edge_label_index,
+            edge_label=train_data.edge_label,
+            num_workers=4,           # Use workers to speed up data loading.
+            pin_memory=True,
+        )
+        val_data, test_data = val_data.to(device), test_data.to(device)
+        print(f"Data prep: {time.time() - timer:.2f} seconds | Using LinkNeighborLoader for training | # of nodes: {num_nodes}, edges: {pyg_data.num_edges}")
+
+        model = GraphSAGE_DP(
             in_channels=N_COMPONENTS,
             hidden_channels=N_COMPONENTS * 2,
             out_channels=N_COMPONENTS
-        ).to(device)
+        )
+        if torch.cuda.is_available() and torch.cuda.device_count() > 1:
+            print(f"Using {torch.cuda.device_count()} GPUs!")
+            model = DataParallel(model)
+        model.to(device)
 
-        gnn_epochs = 1000
-        # gnn_epochs = 10
+        # gnn_epochs = 1000
+        gnn_epochs = 3
 
         optimizer = torch.optim.AdamW(
             params=model.parameters(),
             lr=1e-3,
             weight_decay=1e-2
         )
-        scheduler_patience = 5
         scheduler = ReduceLROnPlateau(
-            optimizer, mode='max', factor=0.5, patience=scheduler_patience, min_lr=1e-10
+            optimizer, mode='max', factor=0.5,
+            patience=5, min_lr=1e-10
         )
         # scheduler = OneCycleLR(
         #     optimizer, max_lr=1e-3, epochs=gnn_epochs, steps_per_epoch=1,
@@ -148,29 +157,52 @@ def main():
         #     T_mult=2, # Factor to increase T_0 after each restart
         #     eta_min=1e-8 # Minimum learning rate
         # )
-        criterion = nn.BCEWithLogitsLoss().to(device)
-        scheduler_name = scheduler.__class__.__name__
-        print(f"Using scheduler: {scheduler_name}")
+        criterion = nn.BCEWithLogitsLoss()
 
         best_val_auc = 0
         patience, max_patience = 0, 50
         history = {'train_loss': [], 'train_auc': [], 'val_auc': []}
         model_save_path = os.path.join("outputs", "models", f'best_gnn_{locale}.pt')
         os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
-
         timer = time.time()
+
         with tqdm(range(1, gnn_epochs + 1), unit="epoch", desc=f"Training {locale}") as pbar:
             for epoch in pbar:
-                loss, train_auc = train(model, optimizer, criterion, train_data)
+                model.train()
+                total_loss = 0
+                all_preds, all_labels = [], []
+                for batch in train_loader:
+                    optimizer.zero_grad()
+                    batch = batch.to(device)
+                    z = model(batch)
+
+                    inner_model = model.module if isinstance(model, DataParallel) else model
+                    out = inner_model.decode(z, batch.edge_label_index).view(-1)
+
+                    loss = criterion(out, batch.edge_label)
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    optimizer.step()
+
+                    total_loss += float(loss) * batch.batch_size
+                    all_preds.append(out.detach().cpu())
+                    all_labels.append(batch.edge_label.detach().cpu())
+
+                train_loss = total_loss / len(train_loader.dataset)
+                train_auc = roc_auc_score(torch.cat(all_labels), torch.cat(all_preds))
+
                 val_auc = test(model, val_data)
-                history['train_loss'].append(loss)
+                history['train_loss'].append(train_loss)
                 history['train_auc'].append(train_auc)
                 history['val_auc'].append(val_auc)
-                scheduler.step(val_auc) if isinstance(scheduler, ReduceLROnPlateau) else scheduler.step()
+                scheduler.step(val_auc)
+
                 pbar.set_postfix(train_auc=f"{train_auc:.4f}", val_auc=f"{val_auc:.4f}", best_val_auc=f"{best_val_auc:.4f}")
+
                 if val_auc > best_val_auc:
                     best_val_auc = val_auc
-                    torch.save(model.state_dict(), model_save_path)
+                    state_to_save = model.module.state_dict() if isinstance(model, DataParallel) else model.state_dict()
+                    torch.save(state_to_save, model_save_path)
                     patience = 0
                 else:
                     patience += 1
@@ -178,13 +210,15 @@ def main():
                     print(f"Early stopping at epoch {epoch}...")
                     break
         print(f"Trained in {time.time() - timer:.2f} seconds.")
-        plot_and_save_history(history, locale, scheduler_name)
-        model.load_state_dict(torch.load(model_save_path, weights_only=True))
+        plot_and_save_history(history, locale, scheduler.__class__.__name__)
+
+        inner_model = model.module if isinstance(model, DataParallel) else model
+        inner_model.load_state_dict(torch.load(model_save_path, weights_only=True))
         test_auc = test(model, test_data)
         print(f"Final AUC: Validation: {best_val_auc:.4f}, Test: {test_auc:.4f}")
 
         with torch.no_grad():
-            final_embeddings_gpu = model.encode(pyg_data.x.to(device), pyg_data.edge_index.to(device), pyg_data.edge_weight.to(device))
+            final_embeddings_gpu = inner_model.encode(pyg_data.x.to(device), pyg_data.edge_index.to(device), pyg_data.edge_weight.to(device))
             final_embeddings_cpu = final_embeddings_gpu.cpu().numpy()
 
         num_products_original = len(prod_id_to_emb_idx)

@@ -31,8 +31,8 @@ class WeightedSAGEConv(MessagePassing):
         return edge_weight.view(-1, 1) * x_j
 
 
-# class GraphSAGE_Old(nn.Module):
-class GraphSAGE(nn.Module):
+class GraphSAGE_Old(nn.Module):
+# class GraphSAGE(nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5):
         super().__init__()
         self.conv1 = WeightedSAGEConv(in_channels, hidden_channels)
@@ -52,8 +52,8 @@ class GraphSAGE(nn.Module):
         return (z[edge_label_index[0]] * z[edge_label_index[1]]).sum(dim=-1)
 
 
-# class GraphSAGE(nn.Module):
-class GraphSAGE_new(nn.Module):
+class GraphSAGE(nn.Module):
+# class GraphSAGE_new(nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5):
         super().__init__()
         self.conv1 = WeightedSAGEConv(in_channels, hidden_channels)
@@ -62,6 +62,30 @@ class GraphSAGE_new(nn.Module):
         self.dropout = dropout
 
     def forward(self, x, edge_index, edge_weight=None):
+        x = self.conv1(x, edge_index, edge_weight)
+        x = self.ln1(x).relu()
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        x = self.conv2(x, edge_index, edge_weight)
+        return x
+
+    def encode(self, x, edge_index, edge_weight=None):
+        return self.forward(x, edge_index, edge_weight)
+
+    def decode(self, z, edge_label_index):
+        return (z[edge_label_index[0]] * z[edge_label_index[1]]).sum(dim=-1)
+
+
+class GraphSAGE_DP(nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5):
+        super().__init__()
+        self.conv1 = WeightedSAGEConv(in_channels, hidden_channels)
+        self.ln1   = LayerNorm(hidden_channels)
+        self.conv2 = WeightedSAGEConv(hidden_channels, out_channels)
+        self.dropout = dropout
+
+    def forward(self, data):
+        x, edge_index, edge_weight = data.x, data.edge_index, getattr(data, 'edge_weight', None)
+        
         x = self.conv1(x, edge_index, edge_weight)
         x = self.ln1(x).relu()
         x = F.dropout(x, p=self.dropout, training=self.training)

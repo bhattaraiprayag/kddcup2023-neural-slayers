@@ -16,19 +16,17 @@ from tqdm import TqdmWarning
 import data_processor
 import data_utils
 import faiss_index
-import gen_emb
+import gen_emb_new
 
-importlib.reload(data_processor)
-importlib.reload(data_utils)
-importlib.reload(faiss_index)
-importlib.reload(gen_emb)
 from configs import (
     BATCH_SIZE, COMBINED_FEATURES, DATA_PATH, EMBED_PATH, P2P_GRAPH_PATH, INDEX_PATH, LOCALES, N_COMPONENTS, NUM_RECOMMENDATIONS, OUTPUT_PATH, PRED_SLICER, PROD_DTYPES, SEED, SESS_DTYPES, SLICER, TASK, TEST_PATH, TRAIN_PATH, USE_PRED_SLICER, USE_SLICER, GRAPH_TYPE
 )
 from data_processor import handle_data
 from data_utils import scale_prices, split_locales
 from faiss_index import create_locale_indices
-from gen_emb import load_locale_embeddings
+# # from gen_emb import load_locale_embeddings
+# from gen_emb_new import load_locale_embeddings
+from gen_emb_opt import load_locale_embeddings
 from session_graph_builder import ProductGraphBuilder
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -70,17 +68,17 @@ def prepare_locale_artefacts():
         locale_faiss_path = os.path.join(INDEX_PATH, f'products_{locale}.faiss')
         locale_p2p_graph_path = os.path.join(P2P_GRAPH_PATH, f'graph_{GRAPH_TYPE}_{locale}.gpickle')
 
-        full_embeddings = load_locale_embeddings(
+        full_embeddings, prod_id_to_emb_idx_map = load_locale_embeddings(
             locale=locale,
-            products=products_by_locale[locale],
-            combined_features=COMBINED_FEATURES,
+            products_df=products_by_locale[locale],
+            text_features=COMBINED_FEATURES,
             batch_size=BATCH_SIZE,
             locale_embed_path={locale: locale_embed_path}
         )
-        id2embidx_path = locale_embed_path.replace('.npy', '_id2embidx.pkl')
-        os.makedirs(os.path.dirname(id2embidx_path), exist_ok=True)
-        with open(id2embidx_path, 'rb') as f:
-            prod_id_to_emb_idx_map = pickle.load(f)
+        # id2embidx_path = locale_embed_path.replace('.npy', '_id2embidx.pkl')
+        # os.makedirs(os.path.dirname(id2embidx_path), exist_ok=True)
+        # with open(id2embidx_path, 'rb') as f:
+        #     prod_id_to_emb_idx_map = pickle.load(f)
 
         reduced_embeddings = reduce_embeddings(full_embeddings, N_COMPONENTS, SEED)
 
